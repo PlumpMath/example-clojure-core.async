@@ -19,44 +19,62 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;
-;;; TITLE: non-blocking
+;;; TITLE: promise/future
+;;;
+
+(def a-promise (promise))
+(deliver a-promise "something")
+(println @a-promise)
+(println @(future (Thread/sleep 1000)
+                  "something"))
+
+;;;
+;;; TITLE: take! and put!
 ;;;
 
 (def ch (chan))
-(def out (atom nil))
+(def out (atom ""))
 
-(take! ch #(reset! out (str %)))
-(put! ch "something")
+(take! ch #(append-line out (str %)))   ; will remove(consume) a "something" in the channel.
+(do (put! ch "something")               ; put "something" in the channel.
+    (println @out))
 
-;; Wait for invoke the callback of `take!'
-(println @out)
 (close! ch)
 
 
 ;;;
-;;; TITLE: blocking
+;;; TITLE: <!! and >!!
 ;;;
 
 (def ch (chan))
 
 (do (thread (Thread/sleep 1000)
-            (>!! ch "something"))
+            (>!! ch "something"))       ; ">!!" is blocked until to put "something" in the channel.
     (time (println (<!! ch))))
+
+(do (thread (Thread/sleep 1000)
+            (println (<!! ch)))         ; "<!!" is blocked until to take "something" in the channel.
+    (time (>!! ch "something")))
 
 (close! ch)
 
 
 ;;;
-;;; TITLE: inversion of control
+;;; TITLE: <! and >!
 ;;;
 
 (def ch (chan))
 (def out (atom nil))
 
-(go (reset! out (<! ch)))
+(<!! ch "something")                    ; Will be blocked.
+
+(go (append-line out (<! ch))           ; "go macro" is use the parking instead of the blocking.
+    (append-line out "invoke after \"<!\""))
+(append-line out "invoke before \"<!\"")
 (go (>! ch "something"))
 
 (println @out)
+
 (close! ch)
 
 
@@ -69,13 +87,12 @@
 
 
 ;;;
-;;; TITLE:
+;;; TITLE: ... ("take"와 "put"은 대칭이다?)
 ;;;
 
 (def ch (chan 1000))
 (def out (atom nil))
-(dotimes [i 1000]
-  (>!! ch i))
+(dotimes [i 1000] (>!! ch i))
 (close! ch)
 
 (dotimes [i 4]
@@ -93,17 +110,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; CHANNEL ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-
-;;;
-;;; TITLE: promise/future
-;;;
-
-(def a-promise (promise))
-(deliver a-promise "something")
-(println @a-promise)
-(println @(future (Thread/sleep 1000)
-                  "something"))
-
 ;;;
 ;;; TITLE: timeout channel
 ;;;
@@ -111,8 +117,7 @@
 (do (def tch (timeout 1000))
     (put! tch "something")
     (println (<!! tch))
-    ;; Channel will be closed after one second...
-    (time (<!! tch)))
+    (time (<!! tch)))     ; Channel will be closed after one second...
 
 
 ;;;
@@ -147,8 +152,7 @@
 (put! ch "something")
 (close! ch)
 
-;; Can read in the closed channel.
-(println (<!! ch))
+(println (<!! ch))                   ; Can read in the closed channel.
 
 
 
@@ -164,13 +168,18 @@
 (def fch (chan 1))
 (def out (atom ""))
 
-(dotimes [i 2]
-  (go (>! fch (str "something-" i))
-      (append-line out "done " i)))
+(go (>! fch (str "something-1"))        ; invoke immediately.
+    (append-line out "done 1"))
 
 (println @out)
-(println (<!! fch))
+
+(go (>! fch (str "something-2")) ; invoke after taking a data in the channel.
+    (append-line out "done 2"))
+
 (println @out)
+
+(do (append-line out (<!! fch))
+    (println @out))
 
 (println (<!! fch))
 
@@ -184,7 +193,9 @@
 (def dch (chan (dropping-buffer 2)))
 (def out (atom ""))
 
-(dotimes [i 3] (put! dch (str "something-" (inc i))))
+(dotimes [i 3]
+  (>!! dch (str "something-" (inc i)))) ; It was not blocked by dropping the last data.
+
 (go (dotimes [i 3]
       (append-line out (<! dch))))
 
@@ -199,7 +210,8 @@
 (def sch (chan (sliding-buffer 2)))
 (def out (atom ""))
 
-(dotimes [i 3] (put! sch (str "something-" (inc i))))
+(dotimes [i 3]
+  (>!! sch (str "something-" (inc i)))) ; It was not blocked by dropping the first data.
 (go (dotimes [i 3]
       (append-line out (<! sch))))
 
@@ -227,9 +239,10 @@
       (recur))))
 
 (doseq [[idx ch] (map-indexed vector chs)]
-  (put! ch (str "ch-" idx)))
+  (>!! ch (str "ch-" idx)))
 
 (println @out)
+
 (doseq [ch chs] (close! ch))
 
 
@@ -267,10 +280,10 @@
       (append-line out "ch-" idx ": " v)
       (recur))))
 
-(>!! bc-ch "something-1")
+(>!! bc-ch "something-a")
 (println @out)
 
-(>!! bc-ch "something-2")
+(>!! bc-ch "something-b")
 (println @out)
 
 (doseq [ch chs] (close! ch))
@@ -335,6 +348,7 @@
 ;;;
 ;;; TITLE: take
 ;;;
+
 (def ch (chan 15))
 (dotimes [i 15]
   (>!! ch i))
@@ -349,6 +363,7 @@
 ;;;
 ;;; TITLE: into
 ;;;
+
 (def ch (chan 10))
 (dotimes [i 10]
   (>!! ch i))
