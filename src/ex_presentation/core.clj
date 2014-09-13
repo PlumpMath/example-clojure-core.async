@@ -1,10 +1,11 @@
 (ns ex-presentation.core
   (:use [clojure.core.async :exclude [reduce take map into partition merge partition-by]])
   (:require [clojure.core.async :as async]
-            [clojure.string     :as str]
-            [org.httpkit.client :as http])
+            [clojure.string     :as string])
   (:gen-class))
 
+
+(throw (Exception. "Stop!"))
 
 (defn line [& worlds]
   (str (apply str worlds) "\n"))
@@ -23,8 +24,12 @@
 ;;;
 
 (def a-promise (promise))
+(def out (atom ""))
+
 (deliver a-promise "something")
-(println @a-promise)
+(append-line out @a-promise)
+(println @out)
+
 (println @(future (Thread/sleep 1000)
                   "something"))
 
@@ -35,9 +40,9 @@
 (def ch (chan))
 (def out (atom ""))
 
-(take! ch #(append-line out (str %)))   ; will remove(consume) a "something" in the channel.
-(do (put! ch "something")               ; put "something" in the channel.
-    (println @out))
+(take! ch #(append-line out (str %))) ; will remove(consume) a "something" in the channel.
+(put! ch "something")                 ; put "something" in the channel.
+(println @out)
 
 (close! ch)
 
@@ -49,12 +54,14 @@
 (def ch (chan))
 
 (do (thread (Thread/sleep 1000)
-            (>!! ch "something"))       ; ">!!" is blocked until to put "something" in the channel.
-    (time (println (<!! ch))))
+            (>!! ch "something")) ; ">!!" is blocked until to put "something" in the channel.
+    (time (println (<!! ch)))
+    (println "done"))
 
 (do (thread (Thread/sleep 1000)
-            (println (<!! ch)))         ; "<!!" is blocked until to take "something" in the channel.
-    (time (>!! ch "something")))
+            (println (<!! ch))) ; "<!!" is blocked until to take "something" in the channel.
+    (time (>!! ch "something"))
+    (println "done"))
 
 (close! ch)
 
@@ -66,13 +73,12 @@
 (def ch (chan))
 (def out (atom nil))
 
-(<!! ch "something")                    ; Will be blocked.
+(>!! ch "something")                    ; Will be blocked.
 
 (go (append-line out (<! ch))           ; "go macro" is use the parking instead of the blocking.
     (append-line out "invoke after \"<!\""))
 (append-line out "invoke before \"<!\"")
 (go (>! ch "something"))
-
 (println @out)
 
 (close! ch)
@@ -101,7 +107,7 @@
               (append-line out "thread-" (inc i) ": " v)
               (recur)))))
 
-(println (count (str/split-lines @out)))
+(println (count (string/split-lines @out)))
 
 
 
@@ -229,21 +235,28 @@
 ;;; TITLE: alts
 ;;;
 
-(def chs (repeatedly 2 chan))
+(def ch-1 (chan))
+(def ch-2 (chan))
 (def out (atom ""))
 
+(def ch-sym->name
+  #({(str ch-1) "ch-1", (str ch-2) "ch-2"} (apply str (drop-last (last (string/split % #" "))))))
+
 (go-loop []
-  (let [[v ch] (alts! chs)]
+  (let [[v ch] (alts! [ch-1 ch-2])]
     (when-not (nil? v)
       (append-line out v " from " ch)
       (recur))))
 
-(doseq [[idx ch] (map-indexed vector chs)]
-  (>!! ch (str "ch-" idx)))
-
+(>!! ch-1 "something for ch-1")
 (println @out)
+(ch-sym->name @out)
 
-(doseq [ch chs] (close! ch))
+(>!! ch-2 "something for ch-2")
+(println @out)
+(ch-sym->name @out)
+
+(doseq [ch [ch-1 ch-2]] (close! ch))
 
 
 ;;;
@@ -256,6 +269,24 @@
 (println (alts!! [ch] :default :nothing))
 
 (close! ch)
+
+
+;;;
+;;; TITLE: priority
+;;;
+
+(def ch-1 (chan))
+(def ch-2 (chan))
+
+(dotimes [i 3] (put! ch-1 :1))
+(dotimes [i 3] (put! ch-2 :2))
+(dotimes [i 6] (println (alts!! [ch-1 ch-2])))
+
+(dotimes [i 3] (put! ch-1 :1))
+(dotimes [i 3] (put! ch-2 :2))
+(dotimes [i 6] (println (alts!! [ch-1 ch-2] :priority true)))
+
+(doseq [ch [ch-1 ch-2]] (close! ch))
 
 
 
@@ -291,35 +322,35 @@
 
 
 ;;;
-;;; TITLE: put/sub
+;;; TITLE: pub/sub
 ;;;
 
 (def to-pub (chan))
 (def p (pub to-pub :tag))
-(def ch-a (chan))
-(def ch-b (chan))
+(def ch-1 (chan))
+(def ch-2 (chan))
 (def out (atom ""))
 
-(sub p :a ch-a)
+(sub p :1 ch-1)
 (go-loop []
-  (when-let [v (<! ch-a)]
-    (append-line out "ch-a: " v)
+  (when-let [v (<! ch-1)]
+    (append-line out "ch-1: " v)
     (recur)))
 
-(sub p :b ch-b)
+(sub p :2 ch-2)
 (go-loop []
-  (when-let [v (<! ch-b)]
-    (append-line out "ch-b: " v)
+  (when-let [v (<! ch-2)]
+    (append-line out "ch-2: " v)
     (recur)))
 
-(>!! to-pub {:tag :a :msg "tag-a"})
+(>!! to-pub {:tag :1 :msg "tag-1"})
 (println @out)
 
-(>!! to-pub {:tag :b :msg "tag-b"})
+(>!! to-pub {:tag :2 :msg "tag-2"})
 (println @out)
 
-(close! ch-a)
-(close! ch-b)
+(close! ch-1)
+(close! ch-2)
 (close! to-pub)
 
 
