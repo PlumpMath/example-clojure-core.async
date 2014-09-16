@@ -33,6 +33,7 @@
 (println @(future (Thread/sleep 1000)
                   "something"))
 
+
 ;;;
 ;;; TITLE: take! and put!
 ;;;
@@ -43,6 +44,19 @@
 (take! ch #(append-line out (str %))) ; will remove(consume) a "something" in the channel.
 (put! ch "something")                 ; put "something" in the channel.
 (println @out)
+
+(close! ch)
+
+
+;;;
+;;; TITLE: limit
+;;;
+
+(def ch (chan))
+
+;; ch will throw the exception.
+(dotimes [i 1025] (take! ch (fn [_])))
+(dotimes [i 1025] (put! ch "something"))
 
 (close! ch)
 
@@ -238,23 +252,19 @@
 (def ch-1 (chan))
 (def ch-2 (chan))
 (def out (atom ""))
-
-(def ch-sym->name
-  #({(str ch-1) "ch-1", (str ch-2) "ch-2"} (apply str (drop-last (last (string/split % #" "))))))
+(def ch-sym->name #({ch-1 "ch-1", ch-2 "ch-2"} %))
 
 (go-loop []
   (let [[v ch] (alts! [ch-1 ch-2])]
     (when-not (nil? v)
-      (append-line out v " from " ch)
+      (append-line out v " from " (ch-sym->name ch))
       (recur))))
 
-(>!! ch-1 "something for ch-1")
+(>!! ch-1 "something-a")
 (println @out)
-(ch-sym->name @out)
 
-(>!! ch-2 "something for ch-2")
+(>!! ch-2 "something-b")
 (println @out)
-(ch-sym->name @out)
 
 (doseq [ch [ch-1 ch-2]] (close! ch))
 
