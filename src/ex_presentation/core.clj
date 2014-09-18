@@ -62,6 +62,30 @@
 
 
 ;;;
+;;; TITLE: Invoke the callback on the current thread when channel has data.
+;;;
+
+(def ch (chan))
+
+(do (put! ch "something")
+    (take! ch (fn [v]
+                (Thread/sleep 1000)
+                (println v)))
+    (println "OMG! waiting until that callback is done."))
+
+(do (put! ch "something")
+    (take! ch (fn [v]
+                (Thread/sleep 1000)
+                (println v))
+           false)
+    (println "Fixed that... Now, \"take!\" has returned immediately."))
+
+(close! ch)
+
+
+
+
+;;;
 ;;; TITLE: <!! and >!!
 ;;;
 
