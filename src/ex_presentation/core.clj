@@ -1,18 +1,28 @@
 (ns ex-presentation.core
+  ;; CIDER는 특정 네임스페이스 안에서 주어진 함수들을 실행하기 위해 모든 명령에 이 `ns'를 같이 실행시킨다.
+  ;; `ns' 함수에는 기본적으로 "(refer 'clojure.core)"가 포함되어 `clojure.core' 네임스페이스와 중복되면 사라진다.
+  ;; 아래와 같은 경우 `with-out-str' 매크로가 사리지는 문제가 발생하였다.
+  ;; 임시적으로 문제 해결을 위해 "(:refer-clojure :exclude [with-out-str])"와 같이 `with-out-str'를 가져오지 못 하도록 지정하였다.
+  (:refer-clojure :exclude [with-out-str])
   (:use [clojure.core.async :exclude [reduce take map into partition merge partition-by]])
   (:require [clojure.core.async :as async]
-            [clojure.string     :as string])
-  (:gen-class))
+            [clojure.string     :as string]))
 
 
 (throw (Exception. "Stop!"))
 
-(defn line [& worlds]
-  (str (apply str worlds) "\n"))
+(defmacro with-out-str [& body]
+  `(let [out# (java.io.StringWriter.)
+         ~'println (fn [args#]
+                     (binding [*out* out#]
+                       (println args#)))]
+     (binding [*out* out#]
+       ~@body)
+     (def ~'out out#)
+     (str out#)))
 
-(defn append-line [to & worlds]
-  (swap! to str (apply line worlds)))
-
+(assert (contains? (into #{} (keys (ns-publics 'ex-presentation.core)))
+                   'with-out-str))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -20,32 +30,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;
-;;; TITLE: promise/future
-;;;
-
-(def a-promise (promise))
-(def out (atom ""))
-
-(deliver a-promise "something")
-(append-line out @a-promise)
-(println @out)
-
-(println @(future (Thread/sleep 1000)
-                  "something"))
-
-
-;;;
 ;;; TITLE: take! and put!
 ;;;
 
-(def ch (chan))
-(def out (atom ""))
-
-(take! ch #(append-line out (str %))) ; will remove(consume) a "something" in the channel.
-(put! ch "something")                 ; put "something" in the channel.
-(println @out)
-
-(close! ch)
+(with-out-str
+  (def ch (chan))         ; create new channel.
+  (take! ch #(println %)) ; will remove(consume) a "something" in the channel.
+  (put! ch "something")   ; put "something" in the channel.
+  (close! ch)             ; close channel.
+  )
+;; Please, wait for evaluate the callback. It's done soon.
+(str out)
 
 
 ;;;
@@ -53,11 +48,11 @@
 ;;;
 
 (def ch (chan))
-
-;; ch will throw the exception.
 (dotimes [i 1025] (take! ch (fn [_])))
-(dotimes [i 1025] (put! ch "something"))
+(close! ch)
 
+(def ch (chan))
+(dotimes [i 1025] (put! ch "something"))
 (close! ch)
 
 
@@ -67,22 +62,24 @@
 
 (def ch (chan))
 
-(do (put! ch "something")
-    (take! ch (fn [v]
-                (Thread/sleep 1000)
-                (println v)))
-    (println "OMG! waiting until that callback is done."))
+(with-out-str (time (do (put! ch "something")
+                        (take! ch (fn [v]
+                                    (Thread/sleep 1000)
+                                    (println v)))
+                        (println "waiting until that callback is done!"))))
+;; Please, wait for evaluate the callback. It's done soon.
+(str out)
 
-(do (put! ch "something")
-    (take! ch (fn [v]
-                (Thread/sleep 1000)
-                (println v))
-           false)
-    (println "Fixed that... Now, \"take!\" has returned immediately."))
+(with-out-str (time (do (put! ch "something abc")
+                        (take! ch (fn [v]
+                                    (Thread/sleep 1000)
+                                    (println v))
+                               false)
+                        (println "Fixed that... Now, \"take!\" has returned immediately."))))
+;; Please, wait for evaluate the callback. It's done soon.
+(str out)
 
 (close! ch)
-
-
 
 
 ;;;
