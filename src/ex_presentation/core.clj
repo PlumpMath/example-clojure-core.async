@@ -1,28 +1,19 @@
 (ns ex-presentation.core
-  ;; CIDER는 특정 네임스페이스 안에서 주어진 함수들을 실행하기 위해 모든 명령에 이 `ns'를 같이 실행시킨다.
-  ;; `ns' 함수에는 기본적으로 "(refer 'clojure.core)"가 포함되어 `clojure.core' 네임스페이스와 중복되면 사라진다.
-  ;; 아래와 같은 경우 `with-out-str' 매크로가 사리지는 문제가 발생하였다.
-  ;; 임시적으로 문제 해결을 위해 "(:refer-clojure :exclude [with-out-str])"와 같이 `with-out-str'를 가져오지 못 하도록 지정하였다.
-  (:refer-clojure :exclude [with-out-str])
+  (:refer-clojure :exclude [println])
   (:use [clojure.core.async :exclude [reduce take map into partition merge partition-by]])
   (:require [clojure.core.async :as async]
             [clojure.string     :as string]))
 
 
-(throw (Exception. "Stop!"))
+(throw (Exception. " REPL stop!"))
 
-(defmacro with-out-str [& body]
-  `(let [out# (java.io.StringWriter.)
-         ~'println (fn [args#]
-                     (binding [*out* out#]
-                       (println args#)))]
-     (binding [*out* out#]
-       ~@body)
-     (def ~'out out#)
-     (str out#)))
-
-(assert (contains? (into #{} (keys (ns-publics 'ex-presentation.core)))
-                   'with-out-str))
+;;; NOTE:
+;;;  Emacs + CIDER 조합을 사용하면, 출력이 분산되는 문제가 있어서 CIDER 버퍼로 출력을 모으는 꼼수.
+(let [out *out*]
+  (defn println [& more]
+    "Redirecting output to CIDER."
+    (binding [*out* out]
+      (apply clojure.core/println more))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -30,93 +21,103 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;
-;;; TITLE: take! and put!
+;;; TITLE: "take!" and "put!" function.
 ;;;
 
-(with-out-str
-  (def ch (chan))         ; create new channel.
-  (take! ch #(println %)) ; will remove(consume) a "something" in the channel.
-  (put! ch "something")   ; put "something" in the channel.
-  (close! ch)             ; close channel.
+(do
+  (def ch (chan))         ; 채널을 생성된다.
+  (take! ch #(println %)) ; 채널에 데이터가 입력되면 등록된 -여기서는 "#(println %)"- 콜백이 실행된다.
+  (put! ch "something")   ; 채널에 데이터를 입력한다.
+  (close! ch)             ; 채널을 닫는다.
   )
-;; Please, wait for evaluate the callback. It's done soon.
-(str out)
 
 
 ;;;
-;;; TITLE: limit
+;;; TITLE: Limitation of callbacks in the channel.
 ;;;
 
-(def ch (chan))
-(dotimes [i 1025] (take! ch (fn [_])))
-(close! ch)
+(let [ch (chan)]
+  ;; 채널에서 기다리는 콜백의 개수가 지정된 숫자를 넘으면 예외가 발생한다.
+  (dotimes [i 1025] (take! ch (fn [_]))))
 
-(def ch (chan))
-(dotimes [i 1025] (put! ch "something"))
-(close! ch)
+(let [ch (chan)]
+  ;; 채널에 데이터를 삽입하는 "put!" 함수도 콜백이 있다.
+  ;; 디폴트로 아무 일도 안하는 함수가 전달된다.
+  (dotimes [i 1025] (put! ch "something")))
 
 
 ;;;
 ;;; TITLE: Invoke the callback on the current thread when channel has data.
 ;;;
 
-(def ch (chan))
+(let [ch (chan)]
+  (time
+    (do
+      ;; 채널의 기본 동작은, 데이터를 있을 경우 "take" 콜백을 등록한 스레드에서 바로 실행된다.
+      ;; 여러모로 성능상 이점이 있을 거라고 생각되지만, 사용에 유의해야 할 것 같다.
+      (put! ch "something")
+      (take! ch (fn [v]
+                  (Thread/sleep 1000)
+                  (println v)))
+      (println "waiting until that callback is done!"))))
 
-(with-out-str (time (do (put! ch "something")
-                        (take! ch (fn [v]
-                                    (Thread/sleep 1000)
-                                    (println v)))
-                        (println "waiting until that callback is done!"))))
-;; Please, wait for evaluate the callback. It's done soon.
-(str out)
-
-(with-out-str (time (do (put! ch "something abc")
-                        (take! ch (fn [v]
-                                    (Thread/sleep 1000)
-                                    (println v))
-                               false)
-                        (println "Fixed that... Now, \"take!\" has returned immediately."))))
-;; Please, wait for evaluate the callback. It's done soon.
-(str out)
-
-(close! ch)
-
-
-;;;
-;;; TITLE: <!! and >!!
-;;;
-
-(def ch (chan))
-
-(do (thread (Thread/sleep 1000)
-            (>!! ch "something")) ; ">!!" is blocked until to put "something" in the channel.
-    (time (println (<!! ch)))
-    (println "done"))
-
-(do (thread (Thread/sleep 1000)
-            (println (<!! ch))) ; "<!!" is blocked until to take "something" in the channel.
-    (time (>!! ch "something"))
-    (println "done"))
-
-(close! ch)
+(let [ch (chan)]
+  (time
+    (do
+      ;; "on-caller"를 false로 전달하면 "take" 콜백을 비동기적으로 실행 할 수 있다.
+      (put! ch "something")
+      (take! ch
+             (fn [v]
+               (Thread/sleep 1000)
+               (println v))
+             false)
+      (println "waiting until that callback is done!"))))
 
 
 ;;;
-;;; TITLE: <! and >!
+;;; TITLE: "<!!" and ">!!" function.
 ;;;
 
-(def ch (chan))
-(def out (atom nil))
+(let [ch (chan)]
+  ;; 끝에 "!!"가 붙은 함수들은 블럭킹이 되는, 즉 동기적으로 실행됩니다.
+  ;; 스레드에서 1초간 기다리기 때문에 가장먼저 실행되는 함수는 let 폼의 마지막 줄의 "<!!" 함수다.
+  ;; "<!!" 함수는 동기적으로 동작하기 때문에 채널에 소비할 데이터가 있을 때 까지 블럭킹 된다.
+  ;; 즉, thrad 폼의 마지막 줄에 있는 ">!!" 함수가 실행될 까지 대기한다.
+  ;; 그래서 "<!!" 함수를 처리하는데 1초가 넘는 시간이 걸리게 된다.
+  (thread
+    (Thread/sleep 1000)
+    (println "Before to send data to channel.")
+    ;; ">!!" 함수는 "promise"를 "put" 콜백으로 넘겨주고, 이 "promise"에 값이 전달될 때 까지 대기한다.
+    ;; "put" 콜백이 실행되면 "deliver" 함수를 호출해 "promise"가 릴리즈 된다.
+    (>!! ch "something"))
+  (println "Before to receive data from channel.")
+  (time (println "Transmitted data from channel:" (str "\"" (<!! ch) "\"")))
+  (println "Done transaction."))
 
-(>!! ch "something")                    ; Will be blocked.
+(let [ch (chan)]
+  ;; ">!!"와 "<!!" 함수가 호출되는 순서를 변경하여도 기본적으로 위 예제와 동일하다.
+  (thread
+    (Thread/sleep 1000)
+    (println "Before to receive data from channel.")
+    ;; "<!!" 함수 역시 ">!!" 함수와 유사하게 동작한다.
+    (println "Transmitted data from channel:" (str "\"" (<!! ch) "\"")))
+  (println "Before to send data to channel.")
+  (time (>!! ch "something"))
+  (println "Done transaction."))
 
-(go (append-line out (<! ch))           ; "go macro" is use the parking instead of the blocking.
-    (append-line out "invoke after \"<!\""))
-(append-line out "invoke before \"<!\"")
-(go (>! ch "something"))
-(println @out)
 
-(close! ch)
+;;;
+;;; TITLE: "<!" and ">!" function.
+;;;
+
+(let [ch (chan)]
+  (go
+    (println "Transmitted data from channel:" (str "\"" (<! ch) "\""))
+    (println "Invoke after \"<!\""))
+
+  (println "Invoke before \"<!\"")
+
+  (go (>! ch "something")))
 
 
 ;;;
