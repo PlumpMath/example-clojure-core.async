@@ -4,16 +4,14 @@
   (:require [clojure.core.async :as async]
             [clojure.string     :as string]))
 
-
-(throw (Exception. " REPL stop!"))
-
 ;;; NOTE:
 ;;;  Emacs + CIDER 조합을 사용하면, 출력이 분산되는 문제가 있어서 CIDER 버퍼로 출력을 모으는 꼼수.
-(let [out *out*]
-  (defn println [& more]
-    "Redirecting output to CIDER."
-    (binding [*out* out]
-      (apply clojure.core/println more))))
+(def println (let [out *out*]
+               (fn [& more]
+                 (binding [*out* out]
+                   (apply clojure.core/println more)))))
+
+(throw (Exception. " REPL stop!"))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -54,7 +52,7 @@
   (time
     (do
       ;; 채널의 기본 동작은, 데이터를 있을 경우 "take" 콜백을 등록한 스레드에서 바로 실행된다.
-      ;; 여러모로 성능상 이점이 있을 거라고 생각되지만, 사용에 유의해야 할 것 같다.
+      ;; "take!"는 비동기적으로 실행될 거라고 예상 하지만, 틀릴 수 있다는 점은 유의해야 한다.
       (put! ch "something")
       (take! ch (fn [v]
                   (Thread/sleep 1000)
@@ -64,7 +62,7 @@
 (let [ch (chan)]
   (time
     (do
-      ;; "on-caller"를 false로 전달하면 "take" 콜백을 비동기적으로 실행 할 수 있다.
+      ;; "on-caller"를 false로 전달하면 콜백을 비동기적으로 실행 할 수 있다.
       (put! ch "something")
       (take! ch
              (fn [v]
@@ -78,31 +76,19 @@
 ;;; TITLE: "<!!" and ">!!" function.
 ;;;
 
+;;; TODO: clean up
+
 (let [ch (chan)]
-  ;; 끝에 "!!"가 붙은 함수들은 블럭킹이 되는, 즉 동기적으로 실행됩니다.
-  ;; 스레드에서 1초간 기다리기 때문에 가장먼저 실행되는 함수는 let 폼의 마지막 줄의 "<!!" 함수다.
-  ;; "<!!" 함수는 동기적으로 동작하기 때문에 채널에 소비할 데이터가 있을 때 까지 블럭킹 된다.
-  ;; 즉, thrad 폼의 마지막 줄에 있는 ">!!" 함수가 실행될 까지 대기한다.
-  ;; 그래서 "<!!" 함수를 처리하는데 1초가 넘는 시간이 걸리게 된다.
+  ;; 끝에 "!!"가 붙은 함수들은 블럭킹이 되는, 즉 동기적으로 실행되는 함수들이다.
   (thread
     (Thread/sleep 1000)
     (println "Before to send data to channel.")
-    ;; ">!!" 함수는 "promise"를 "put" 콜백으로 넘겨주고, 이 "promise"에 값이 전달될 때 까지 대기한다.
-    ;; "put" 콜백이 실행되면 "deliver" 함수를 호출해 "promise"가 릴리즈 된다.
+    ;; ">!!" 함수는 "put!" 함수의 블럭킹 버전~
     (>!! ch "something"))
   (println "Before to receive data from channel.")
-  (time (println "Transmitted data from channel:" (str "\"" (<!! ch) "\"")))
-  (println "Done transaction."))
-
-(let [ch (chan)]
-  ;; ">!!"와 "<!!" 함수가 호출되는 순서를 변경하여도 기본적으로 위 예제와 동일하다.
-  (thread
-    (Thread/sleep 1000)
-    (println "Before to receive data from channel.")
-    ;; "<!!" 함수 역시 ">!!" 함수와 유사하게 동작한다.
-    (println "Transmitted data from channel:" (str "\"" (<!! ch) "\"")))
-  (println "Before to send data to channel.")
-  (time (>!! ch "something"))
+  ;; "<!!" 함수는 "take!" 함수의 블럭킹 버전~
+  (let [output (<!! ch)]
+    (println "Transmitted data from channel:" (str "\"" output "\"")))
   (println "Done transaction."))
 
 
@@ -111,40 +97,30 @@
 ;;;
 
 (let [ch (chan)]
+  ;; "<!"와 ">!" 함수는 "go" 블럭 안에서만 사용할 수 있다.
+  ;; "go" 블럭 안에서의 "<!"와 ">!" 함수는 마치 "<!!"와 ">!!"와 같이 동작하지만,
+  ;; ...
   (go
-    (println "Transmitted data from channel:" (str "\"" (<! ch) "\""))
-    (println "Invoke after \"<!\""))
-
-  (println "Invoke before \"<!\"")
-
-  (go (>! ch "something")))
+    (Thread/sleep 1000)
+    (println "1.1 - Before to receive data from channel.")
+    (println "1.2 - Transmitted data from channel:" (str "\"" (<! ch) "\""))
+    (println "1.3 - Done."))
+  (go
+    (println "2.1 - Before to send data to channel.")
+    (>! ch "something")
+    (println "2.2 - Done."))
+  (println "Done transaction."))
 
 
 ;;;
 ;;; TITLE: can't put the `nil' in the channel.
 ;;;
 
-(def ch (chan))
-(put! ch nil)
-
-
-;;;
-;;; TITLE: ... ("take"와 "put"은 대칭이다?)
-;;;
-
-(def ch (chan 1000))
-(def out (atom nil))
-(dotimes [i 1000] (>!! ch i))
-(close! ch)
-
-(dotimes [i 4]
-  (thread (loop []
-            (when-let [v (<!! ch)]
-              (append-line out "thread-" (inc i) ": " v)
-              (recur)))))
-
-(println (count (string/split-lines @out)))
-
+(let [ch (chan)]
+  (try
+    (put! ch nil)
+    (catch Exception e
+      (println "caught exception: " (.getMessage e)))))
 
 
 
@@ -156,45 +132,38 @@
 ;;; TITLE: timeout channel
 ;;;
 
-(do (def tch (timeout 1000))
-    (put! tch "something")
-    (println (<!! tch))
-    (time (<!! tch)))     ; Channel will be closed after one second...
+(let [tch (timeout 1000)]
+  (time (<!! tch)))       ; Channel will be closed after one second...
 
 
 ;;;
 ;;; TITLE: `thread' return the channel.
 ;;;
 
-(def result-ch (thread
-                 (Thread/sleep 1000)
-                 "result of `thread' block"))
-
-(println (<!! result-ch))
-(close! result-ch)
+(let [ch (thread
+           (Thread/sleep 1000)
+           "result of `thread' block")]
+  (println (<!! ch)))
 
 
 ;;;
 ;;; TITLE: `go' return the channel.
 ;;;
 
-(def result-ch (go
-                 (Thread/sleep 1000)
-                 "result of `go' block"))
-
-(println (<!! result-ch))
-(close! result-ch)
+(let [ch (go
+           (Thread/sleep 1000)
+           "result of `go' block")]
+  (println (<!! ch)))
 
 
 ;;;
 ;;; TITLE: closed channel
 ;;;
 
-(def ch (chan))
-(put! ch "something")
-(close! ch)
-
-(println (<!! ch))                   ; Can read in the closed channel.
+(let [ch (chan)]
+  (put! ch "something from closed channel.")
+  (close! ch)
+  (println (<!! ch)))                ; Can read in the closed channel.
 
 
 
