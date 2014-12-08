@@ -141,7 +141,7 @@
   (time
     (go
       ;; NOTE:
-      ;;  go 매크로 안에서 커스텀 time 매크로가 사용이 불가해서 전달 시간을 사용함.
+      ;;  go 매크로 안에서 커스텀 time 매크로가 사용이 불가해서 time 대신에 전달 시간을 보여줌.
       (let [send-time (<! ch)
             receive-time (. java.lang.System (clojure.core/nanoTime))
             delivery-time (/ (double (- receive-time send-time)) 1000000.0)]
@@ -190,11 +190,14 @@
 ;;; TITLE: `thread' return the channel.
 ;;;
 
+;; "thread"는 채널을 반환하고 채널에 "thread" body의 반환값을 전달한다.
 (let [ch (thread
            (Thread/sleep 1000)
            "result of `thread' block")]
+  (println "Waiting until `thread' is done.")
   (println (<!! ch)))
 
+;; => Waiting until `thread' is done.
 ;; => result of `thread' block
 
 
@@ -203,11 +206,14 @@
 ;;; TITLE: `go' return the channel.
 ;;;
 
+;; "go" 블럭도 채널을 반환한다.
 (let [ch (go
            (Thread/sleep 1000)
            "result of `go' block")]
+  (println "Waiting until `go' block is done.")
   (println (<!! ch)))
 
+;; => Waiting until `go' block is done.
 ;; => result of `go' block
 
 
@@ -235,20 +241,31 @@
 ;;; TITLE: fixed buffer
 ;;;
 
-(def fch (chan 1))
+(let [buf-size 1
+      ch (chan buf-size)]
+  ;; core.async는 디폴트로 3가지 종류의 버퍼를 지원한다.
+  ;; 이 예제에서는 가장 기본적인 fixed buffer를 사용한다.
+  ;; 버퍼 개수를 "chan" 함수에 넘겨주면 그 만큼 데이터를 채널에 쌓을 수 있다.
+  (go
+    (>! ch "1. \">!\" insert a data to the channel without parking.")
+    (println "1. Done!"))
 
-(go
-  (>! fch (str "something-1"))          ; invoke immediately.
-  (println "done 1"))
+  (go
+    (>! ch (str "2. \">!\" insert a data to the channel with parking.\n"
+                "   Parking until take a data in the channel."))
+    (println "2. Done!"))
 
-(go
-  (>! fch (str "something-2")) ; invoke after taking a data in the channel.
-  (println "done 2"))
+  (Thread/sleep 1000)
+  (println (<!! ch))
+  (Thread/sleep 1000)
+  (println (<!! ch)))
 
-(println (<!! fch))
-(println (<!! fch))
+;; => 1. Done!
+;; => 1. ">!" insert a data to the channel without parking.
 
-(close! fch)
+;; => 2. Done!
+;; => 2. ">!" insert a data to the channel with parking.
+;; =>    Parking until take a data in the channel.
 
 
 
@@ -256,16 +273,24 @@
 ;;; TITLE: dropping buffer
 ;;;
 
-(def dch (chan (dropping-buffer 2)))
+;; "dropping-buffer"는 버퍼의 공간이 없는 경우 채널로 들어오는 데이터를 버린다.
+;; 버퍼 크기가 2인 채널에 데이터를 3개 넣은 경우 세번째 넣은 데이터는 버려진다.
+(let [times 3
+      buf-size 2
+      buf (dropping-buffer buf-size)
+      ch (chan buf)]
+  (dotimes [i times]
+    (>!! ch (str "something-" (inc i))))
+  (go
+    (dotimes [i times]
+      (println "Try" (str (inc i) "..."))
+      (println (<! ch)))))
 
-(dotimes [i 3]
-  (>!! dch (str "something-" (inc i)))) ; It was not blocked by dropping the last data.
-
-(go
-  (dotimes [i 3]
-    (println (<! dch))))
-
-(close! dch)
+;; => Try 1...
+;; => something-1
+;; => Try 2...
+;; => something-2
+;; => Try 3...
 
 
 
@@ -273,17 +298,24 @@
 ;;; TITLE: sliding buffer
 ;;;
 
-(def sch (chan (sliding-buffer 2)))
-(def out (atom ""))
+;; "sliding-buffer"는 버퍼의 공간이 없는 경우 채널에서 가장 오래된 데이터를 버린다.
+;; 버퍼 크기가 2인 채널에 데이터를 3개 넣은 경우 첫번째 넣은 데이터는 버려진다.
+(let [times 3
+      buf-size 2
+      buf (sliding-buffer 2)
+      ch (chan buf)]
+  (dotimes [i times]
+    (>!! ch (str "something-" (inc i))))
+  (go
+    (dotimes [i times]
+      (println "Try" (str (inc i) "..."))
+      (println (<! ch)))))
 
-(dotimes [i 3]
-  (>!! sch (str "something-" (inc i)))) ; It was not blocked by dropping the first data.
-(go
-  (dotimes [i 3]
-    (println (<! sch))))
-
-(close! sch)
-
+;; => Try 1...
+;; => something-2
+;; => Try 2...
+;; => something-3
+;; => Try 3...
 
 
 
