@@ -327,22 +327,47 @@
 ;;; TITLE: alts
 ;;;
 
-(def ch-1 (chan))
-(def ch-2 (chan))
-(def ch-sym->name #({ch-1 "ch-1", ch-2 "ch-2"} %))
+(let [ch1 (chan), ch2 (chan)
+      sym->name #({ch1 "channel 1", ch2 "channel 2"} %)]
+  (go-loop []
+    ;; "alts!"는 여러 채널 중에 데이터가 입력된 채널과 데이터를 반환한다.
+    ;; 만약 유닉스 시스템 프로그래밍에서 select나 poll 함수와 비슷하다고 보면된다.
+    ;; 블럭킹 버전 "alts!!"도 있다.
+    (let [[val ch] (alts! [ch1 ch2])]
+      (when-not (nil? val)
+        (println val "from" (sym->name ch))
+        (recur))))
 
-(go-loop []
-  (let [[v ch] (alts! [ch-1 ch-2])]
-    (when-not (nil? v)
-      (println v "from" (ch-sym->name ch))
-      (recur))))
+  (Thread/sleep 1000)
+  (>!! ch1 "something A")
 
-(>!! ch-1 "something-a")
+  (Thread/sleep 1000)
+  (>!! ch2 "something B"))
 
-(>!! ch-2 "something-b")
+;; => something A from channel 1
+;; => something B from channel 2
 
-(doseq [ch [ch-1 ch-2]]
-  (close! ch))
+
+
+;;;
+;;; TITLE: ...
+;;;
+
+(let [ch (chan)
+      p (promise)]
+  (go-loop []
+    ;; ch 채널에 1초 동안 데이터가 입력이 없을 경우 임의의 행동을 취할 수 있다.
+    (let [[val ch] (alts! [ch (timeout 1000)])]
+      (if (nil? val)
+        (deliver p nil)
+        (recur))))
+
+  (println "Wait until the channel is time-out.")
+  @p
+  (println "Timeout!"))
+
+;; => Wait until the channel is timeout.
+;; => Timeout!
 
 
 
@@ -350,12 +375,11 @@
 ;;; TITLE: default value
 ;;;
 
-(def ch (chan))
-
-(put! ch "something")
-(println (alts!! [ch] :default :nothing))
-
-(close! ch)
+(let [ch (chan)]
+  (put! ch "something")
+  (dotimes [_ 2]
+    ;; 이건 왜 필요한지 모르겠지만 채널에 이미 입력된 데이터들을 처리할때 좋을 것 같음.
+    (println (alts!! [ch] :default :nothing))))
 
 
 
@@ -363,19 +387,59 @@
 ;;; TITLE: priority
 ;;;
 
-(def ch-1 (chan))
-(def ch-2 (chan))
+(let [k 3
+      ch1 (chan)
+      ch2 (chan)
+      sym->name #({ch1 "channel-1", ch2 "channel-2"} %)]
+  ;; "alts!!"는 채널에서 순서없이 데이터를 가져온다.
+  (println "Random")
+  (dotimes [_ k]
+    (put! ch1 :1)
+    (put! ch2 :2))
+  (dotimes [_ (* k 2)]
+    (let [[val ch] (alts!! [ch1 ch2])]
+      (println val (sym->name ch))))
 
-(dotimes [i 3] (put! ch-1 :1))
-(dotimes [i 3] (put! ch-2 :2))
-(dotimes [i 6] (println (alts!! [ch-1 ch-2])))
+  ;; "alts!!"에 ":priority"를 선언하면 채널의 순서대로 데이터를 가져온다.
+  (println "\nIn order")
+  (dotimes [_ k]
+    (put! ch1 :1)
+    (put! ch2 :2))
+  (dotimes [_ (* k 2)]
+    (let [[val ch] (alts!! [ch1 ch2] :priority true)]
+      (println val (sym->name ch))))
 
-(dotimes [i 3] (put! ch-1 :1))
-(dotimes [i 3] (put! ch-2 :2))
-(dotimes [i 6] (println (alts!! [ch-1 ch-2] :priority true)))
+  (println "\nIn order")
+  (dotimes [_ k]
+    (put! ch1 :1)
+    (put! ch2 :2))
+  (dotimes [_ (* k 2)]
+    (let [[val ch] (alts!! [ch2 ch1] :priority true)]
+      (println val (sym->name ch)))))
 
-(doseq [ch [ch-1 ch-2]] (close! ch))
+;; => Random
+;; => :2 channel-2
+;; => :1 channel-1
+;; => :1 channel-1
+;; => :2 channel-2
+;; => :2 channel-2
+;; => :1 channel-1
 
+;; => In order
+;; => :1 channel-1
+;; => :1 channel-1
+;; => :1 channel-1
+;; => :2 channel-2
+;; => :2 channel-2
+;; => :2 channel-2
+
+;; => In order
+;; => :2 channel-2
+;; => :2 channel-2
+;; => :2 channel-2
+;; => :1 channel-1
+;; => :1 channel-1
+;; => :1 channel-1
 
 
 
@@ -387,24 +451,20 @@
 ;;; TITLE: mult/tab
 ;;;
 
-(def bc-ch (chan))
-(def m (mult bc-ch))
-(def chs (repeatedly 2 chan))
+(let [boardcast-ch (chan)
+      bridge (mult boardcast-ch)
+      ch1 (chan), ch2 (chan)
+      sym->name #({ch1 "channel-1", ch2 "channel-2"} %)]
+  ;; TODO: 설명.
+  (doseq [ch [ch1 ch2]]
+    (tap bridge ch)
+    (go-loop []
+      (when-let [val (<! ch)]
+        (println val "from" (sym->name ch)))))
 
-(doseq [[idx ch] (map-indexed vector chs)]
-  (tap m ch)
-  (go-loop []
-    (when-let [v (<! ch)]
-      (println "ch-" idx ":" v)
-      (recur))))
-
-(>!! bc-ch "something-a")
-
-(>!! bc-ch "something-b")
-
-(doseq [ch chs]
-  (close! ch))
-(close! bc-ch)
+  ;; TODO: 설명.
+  (>!! boardcast-ch "something-a")
+  (>!! boardcast-ch "something-b"))
 
 
 
