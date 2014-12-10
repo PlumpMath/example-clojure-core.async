@@ -455,16 +455,21 @@
       bridge (mult boardcast-ch)
       ch1 (chan), ch2 (chan)
       sym->name #({ch1 "channel-1", ch2 "channel-2"} %)]
-  ;; TODO: 설명.
+  ;; "mult"와 "tap" 조합을 사용하면 채널로 브로드캐스트와 같은 기능을 사용할 수 있다.
   (doseq [ch [ch1 ch2]]
     (tap bridge ch)
     (go-loop []
       (when-let [val (<! ch)]
-        (println val "from" (sym->name ch)))))
+        (println val "from" (sym->name ch))
+        (recur))))
 
-  ;; TODO: 설명.
   (>!! boardcast-ch "something-a")
   (>!! boardcast-ch "something-b"))
+
+;; => something-a from channel-2
+;; => something-a from channel-1
+;; => something-b from channel-2
+;; => something-b from channel-1
 
 
 
@@ -472,31 +477,24 @@
 ;;; TITLE: pub/sub
 ;;;
 
-(def to-pub (chan))
-(def p (pub to-pub :tag))
-(def ch-1 (chan))
-(def ch-2 (chan))
+(let [publisher (chan)
+      bridge (pub publisher :tag)
+      ch1 (chan), ch2 (chan)
+      sym->name #({ch1 "channel-1", ch2 "channel-2"} %)]
+  ;; "pub"와 "sub" 조합을 사용하면 publisher/subscriber 패턴을 구현할 수 있다.
+  (sub bridge :1 ch1)
+  (sub bridge :2 ch2)
+  (doseq [ch [ch1 ch2]]
+    (go-loop []
+      (when-let [val (<! ch)]
+        (println val "from" (sym->name ch))
+        (recur))))
 
-(sub p :1 ch-1)
-(go-loop []
-  (when-let [v (<! ch-1)]
-    (println "ch-1: " v)
-    (recur)))
+  (>!! publisher {:tag :1 :msg "tag-1"})
+  (>!! publisher {:tag :2 :msg "tag-2"}))
 
-(sub p :2 ch-2)
-(go-loop []
-  (when-let [v (<! ch-2)]
-    (println "ch-2: " v)
-    (recur)))
-
-(>!! to-pub {:tag :1 :msg "tag-1"})
-
-(>!! to-pub {:tag :2 :msg "tag-2"})
-
-(close! ch-1)
-(close! ch-2)
-(close! to-pub)
-
+;; => {:msg tag-1, :tag :1} from channel-1
+;; => {:msg tag-2, :tag :2} from channel-2
 
 
 
