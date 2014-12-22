@@ -506,16 +506,26 @@
 ;;; TITLE: merge
 ;;;
 
-(def chs (repeatedly 10 chan))
-(doseq [[idx ch] (map-indexed vector chs)]
-  (put! ch idx))
+(let [chs (repeatedly 10 chan)
+      ;; 채널들을 `merged-ch'에 모은다.
+      merged-ch (async/merge chs)]
+  ;; 각 채널에 0에서부터 9까지의 데이터를 삽입한다.
+  (doseq [[idx ch] (map-indexed vector chs)]
+    (put! ch idx))
+  ;; 각각의 채널에 삽입한 데이터가 순서없이 출력된다.
+  (dotimes [i 10]
+    (println (<!! merged-ch))))
 
-(def ch (async/merge chs))
-(dotimes [i 10]
-  (println (<!! ch)))
-
-(doseq [ch chs] (close! ch))
-(close! ch)
+;; => 0
+;; => 1
+;; => 3
+;; => 5
+;; => 7
+;; => 9
+;; => 8
+;; => 4
+;; => 2
+;; => 6
 
 
 
@@ -523,15 +533,30 @@
 ;;; TITLE: take
 ;;;
 
-(def ch (chan 15))
-(dotimes [i 15]
-  (>!! ch i))
+(let [ch (chan 15)]
+  (dotimes [i 15]
+    (>!! ch i))
+  ;; `core.async/take' 함수는 대상이 채널이라는 것을 제외하고는 `clojure.core/take' 함수와 똑같은 기능을 한다.
+  ;; 닫힌 채널을 반환하기 때문에 `<!!' 함수를 사용해도 블럭킹 되지 않는다.
+  (let [take-ch (async/take 10 ch)]
+    (dotimes [_ 15]
+      (println (<!! take-ch)))))
 
-(def take-ch (async/take 10 ch))
-(dotimes [i 15]
-  (println (<!! take-ch)))
-
-(close! ch)
+;; => 0
+;; => 1
+;; => 2
+;; => 3
+;; => 4
+;; => 5
+;; => 6
+;; => 7
+;; => 8
+;; => 9
+;; => nil
+;; => nil
+;; => nil
+;; => nil
+;; => nil
 
 
 
@@ -539,10 +564,12 @@
 ;;; TITLE: into
 ;;;
 
-(def ch (chan 10))
-(dotimes [i 10]
-  (>!! ch i))
-(close! ch)
+(let [ch (chan 10)]
+  (dotimes [i 10]
+    (>!! ch i))
+  ;; `take' 함수와 마찬가지로 `core.async/into' 함수 역시 `into' 함수와 똑같지만 채널을 넘겨받는다.
+  ;; `ch' 채널이 닫혀있지않으면 블럭킹 되기 때문에 `into' 함수를 호출하기 전에 닫는다.
+  (close! ch)
+  (print (<!! (async/into [] ch))))
 
-(def into-ch (async/into [] ch))
-(<!! into-ch)
+;; => [0 1 2 3 4 5 6 7 8 9]
